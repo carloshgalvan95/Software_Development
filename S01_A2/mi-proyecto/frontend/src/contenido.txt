@@ -1,0 +1,1 @@
+Componentes y páginas React: listado de eval runs, vista de diff de scores, controles promote/block del gate y cliente HTTP hacia el API FastAPI.

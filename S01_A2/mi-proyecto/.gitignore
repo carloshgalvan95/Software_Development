@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/build/
+*.log
+.npm/
+.pnpm-store/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Docker / local data
+postgres_data/
+*.sqlite3
+
+# Secrets / eval artifacts grandes
+artifacts/
+runs/raw/

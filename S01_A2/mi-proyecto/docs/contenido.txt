@@ -1,0 +1,1 @@
+Documentación del proyecto: diagrama de arquitectura, decisiones (ADR), guía de contribución, capturas del gate y notas de alcance vs Promptfoo/DeepEval.

@@ -1,0 +1,1 @@
+Dockerfiles (backend/frontend) y docker-compose.yml para API + Postgres + UI. Incluirá variables de entorno de ejemplo; sin secretos reales.

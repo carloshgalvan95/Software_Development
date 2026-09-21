@@ -1,0 +1,1 @@
+Paquete fuente del backend (módulos Python): endpoints de runs/scores/gates, lógica de comparación de regresiones y clientes a modelos/judges cuando se implemente en semanas 5–6.

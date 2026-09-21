@@ -1,0 +1,1 @@
+Código y configuración del servicio FastAPI: app entrypoint, routers, esquemas Pydantic, servicios de evaluación, acceso a Postgres y tests del API. Sin implementación detallada en S01_A2.

@@ -1,0 +1,1 @@
+Aplicación React + Vite: configuración del bundler, dependencias npm y assets estáticos. La UI detallada se arma en semanas 7–8.
