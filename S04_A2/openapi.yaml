@@ -1,0 +1,1905 @@
+openapi: 3.0.3
+info:
+  title: Cobra360 API
+  version: 1.0.0
+  description: |
+    Contrato REST de Cobra360, sistema de gestión de cobranza en campo para cajas de ahorro.
+    Diseño spec-first derivado del SRS de la actividad S02-A1 (TC5062).
+    Cada operación declara en x-acceptance-criteria los IDs de los criterios Dado-Cuando-Entonces
+    del SRS que cubre. Montos en MXN como cadena decimal con dos posiciones para evitar errores de
+    punto flotante. Fechas en formato ISO 8601; la zona horaria de negocio es America/Mexico_City.
+    Autor: Carlos Humberto Galván Perales (A01797969).
+  contact:
+    name: Carlos Humberto Galván Perales
+servers:
+  - url: https://cobra360.example.mx/api/v1
+    description: Servidor de producción (VM con Docker Compose detrás de Caddy)
+  - url: http://localhost:8000/api/v1
+    description: Entorno local de desarrollo
+security:
+  - bearerAuth: []
+tags:
+  - name: sesiones
+    description: Autenticación (RF-01)
+  - name: usuarios
+    description: Administración de usuarios (RF-02)
+  - name: cartera
+    description: Importación, créditos y asignación (RF-03, RF-04)
+  - name: campo
+    description: Ruta, visitas, promesas y sincronización (RF-05, RF-06, RF-09, RF-13)
+  - name: efectivo
+    description: Pagos, recibos, anulaciones, cortes y exportación (RF-07, RF-08, RF-10, RF-11)
+  - name: indicadores
+    description: Tablero, configuración y bitácora (RF-12, RNF-04)
+  - name: publico
+    description: Consulta de recibo sin cuenta (RF-08)
+
+paths:
+  /sessions:
+    post:
+      tags: [sesiones]
+      operationId: createSession
+      summary: Iniciar sesión con correo y contraseña
+      description: |
+        Crea una sesión y devuelve un JWT con el rol del usuario. El mensaje de error no indica si
+        falló el correo o la contraseña. Cinco intentos fallidos en 15 minutos bloquean la cuenta
+        (RNF-01). La duración del token depende del rol (RNF-02).
+      security: []
+      x-acceptance-criteria: [RF-01-AC-1, RF-01-AC-2, RF-01-AC-4]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: ana.gestor@caja.mx
+              password: Cobro2026x
+      responses:
+        '201':
+          description: Sesión creada; se registra LOGIN_OK en la bitácora.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Credenciales incorrectas o cuenta bloqueada temporalmente; se registra LOGIN_FALLIDO.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: CREDENCIALES_INVALIDAS
+                message: Correo o contraseña incorrectos
+        '403':
+          description: Usuario inactivo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: USUARIO_INACTIVO
+                message: Usuario inactivo. Contacta a la gerencia
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users:
+    get:
+      tags: [usuarios]
+      operationId: listUsers
+      summary: Listar usuarios (Gerente)
+      description: Incluye usuarios inactivos para conservar su historial.
+      x-acceptance-criteria: [RF-02-AC-1, RF-02-AC-3, RF-01-AC-3]
+      parameters:
+        - name: role
+          in: query
+          schema:
+            $ref: '#/components/schemas/Role'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/UserStatus'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Página de usuarios.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [usuarios]
+      operationId: createUser
+      summary: Crear usuario (Gerente)
+      x-acceptance-criteria: [RF-02-AC-1, RF-02-AC-2, RF-02-AC-4, RF-01-AC-3]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: Usuario creado en estado ACTIVO.
+          headers:
+            Location:
+              description: URL del usuario creado.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Ya existe un usuario con ese correo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: CORREO_DUPLICADO
+                message: Ya existe un usuario con ese correo
+        '422':
+          description: Regla de negocio incumplida (gestor sin supervisor, contraseña débil).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: SUPERVISOR_REQUERIDO
+                message: El gestor debe tener un supervisor responsable
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /users/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      tags: [usuarios]
+      operationId: getUser
+      summary: Consultar un usuario (Gerente)
+      x-acceptance-criteria: [RF-02-AC-1]
+      responses:
+        '200':
+          description: Usuario.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [usuarios]
+      operationId: updateUser
+      summary: Editar o desactivar un usuario (Gerente)
+      description: |
+        Desactivar es cambiar status a INACTIVO; el usuario nunca se borra. Al desactivar un gestor
+        sus créditos quedan sin asignar. Se rechaza si el gestor tiene efectivo no entregado.
+      x-acceptance-criteria: [RF-02-AC-3, RF-02-AC-4, RF-02-AC-5]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserUpdate'
+      responses:
+        '200':
+          description: Usuario actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: El gestor tiene efectivo no entregado o queda sin supervisor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: EFECTIVO_NO_ENTREGADO
+                message: El gestor tiene efectivo no entregado (2,300.00). Debe generar su corte antes de desactivarlo
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /portfolio-imports:
+    post:
+      tags: [cartera]
+      operationId: createPortfolioImport
+      summary: Importar cartera desde CSV del core (Supervisor)
+      description: |
+        Procesa el archivo de forma síncrona (hasta 20,000 filas y 10 MB, RNF-05). Crea o actualiza
+        créditos por numero_credito, conserva el gestor asignado y descuenta los pagos Registrados con
+        fecha posterior a la fecha de corte. Las filas inválidas se rechazan individualmente.
+      x-acceptance-criteria: [RF-03-AC-1, RF-03-AC-2, RF-03-AC-3, RF-03-AC-4, RF-03-AC-5, RF-01-AC-3]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PortfolioImportRequest'
+      responses:
+        '201':
+          description: Importación registrada con su resumen.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortfolioImport'
+              example:
+                id: 3f1d2c4b-1a2b-4c3d-8e9f-0a1b2c3d4e5f
+                cutoffDate: '2026-10-05'
+                created: 480
+                updated: 20
+                rejected: 0
+                message: 'Importación terminada: 480 creados, 20 actualizados, 0 rechazados'
+        '400':
+          description: Archivo ilegible o sin columnas obligatorias; no se modifica ningún crédito.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: COLUMNA_FALTANTE
+                message: 'Falta la columna obligatoria: monto_vencido'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          description: El archivo supera 10 MB o 20,000 filas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /portfolio-imports/{importId}/rejected-rows:
+    parameters:
+      - name: importId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [cartera]
+      operationId: listRejectedRows
+      summary: Descargar el reporte de filas rechazadas de una importación
+      description: Responde JSON o CSV según el encabezado Accept.
+      x-acceptance-criteria: [RF-03-AC-2]
+      responses:
+        '200':
+          description: Filas rechazadas con fila, campo y motivo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RejectedRow'
+            text/csv:
+              schema:
+                type: string
+              example: |
+                fila,campo,motivo
+                7,saldo_total,saldo_total debe ser mayor o igual a 0.00
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credits:
+    get:
+      tags: [cartera]
+      operationId: listCredits
+      summary: Listar créditos con filtros (Supervisor, Gerente)
+      description: El Supervisor solo ve créditos sin asignar o asignados a gestores a su cargo.
+      x-acceptance-criteria: [RF-02-AC-3, RF-04-AC-1]
+      parameters:
+        - name: assigned
+          in: query
+          description: false devuelve la lista de créditos por asignar.
+          schema:
+            type: boolean
+        - name: collectorId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: q
+          in: query
+          description: Búsqueda por número de crédito o nombre del socio.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Página de créditos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreditPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /credits/{creditId}:
+    parameters:
+      - $ref: '#/components/parameters/CreditId'
+    get:
+      tags: [cartera]
+      operationId: getCredit
+      summary: Detalle de un crédito
+      description: Un gestor solo puede abrir créditos que tiene asignados; el intento se registra como ACCESO_DENEGADO.
+      x-acceptance-criteria: [RF-05-AC-3]
+      responses:
+        '200':
+          description: Detalle del crédito.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Credit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /assignments:
+    post:
+      tags: [cartera]
+      operationId: createAssignment
+      summary: Asignar o reasignar créditos a un gestor (Supervisor)
+      description: |
+        mode=CREDITS asigna la lista creditIds. mode=PENDING_FROM_COLLECTOR mueve al gestor destino
+        los créditos de fromCollectorId que no tienen visita hoy. Cada cambio genera un evento ASIGNACION.
+      x-acceptance-criteria: [RF-04-AC-1, RF-04-AC-2, RF-04-AC-3, RF-04-AC-4]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignmentRequest'
+      responses:
+        '201':
+          description: Asignación aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignmentResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: El gestor destino no está a cargo del supervisor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: GESTOR_AJENO
+                message: El gestor no está a tu cargo
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: El gestor destino está inactivo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: GESTOR_INACTIVO
+                message: Solo se pueden asignar créditos a gestores activos
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /collectors/me/route:
+    get:
+      tags: [campo]
+      operationId: getMyRoute
+      summary: Ruta priorizada del día del gestor autenticado
+      description: |
+        Créditos asignados con monto vencido mayor a 0.00. Orden: sin promesa vigente primero; dentro
+        de cada grupo días de atraso desc, monto vencido desc y número de crédito asc. No se pagina
+        porque la PWA la descarga completa para trabajar sin conexión (RNF-09).
+      x-acceptance-criteria: [RF-05-AC-1, RF-05-AC-2, RF-05-AC-3, RF-06-AC-1, RF-07-AC-2, RF-09-AC-1, RF-11-AC-5, RF-01-AC-1]
+      responses:
+        '200':
+          description: Ruta del día.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Route'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /visits:
+    post:
+      tags: [campo]
+      operationId: createVisit
+      summary: Registrar una visita (con pago o promesa embebidos)
+      description: |
+        Una visita PAGO debe traer payment y una visita PROMESA debe traer promise, en la misma
+        operación. clientUuid es la llave de idempotencia: si ya existe, responde 200 con la visita
+        original y no crea otra. El folio lo asigna el servidor (RD-04).
+      x-acceptance-criteria: [RF-06-AC-1, RF-06-AC-2, RF-06-AC-3, RF-06-AC-4, RF-07-AC-1, RF-07-AC-2, RF-07-AC-3, RF-07-AC-4, RF-08-AC-2, RF-09-AC-1, RF-09-AC-2, RF-09-AC-3, RF-10-AC-5, RF-13-AC-3]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VisitCreate'
+            example:
+              clientUuid: 7f1c9e2a-3b4d-4c5e-9f60-1a2b3c4d5e6f
+              creditId: 9b2e1f00-0000-4000-8000-000000001001
+              result: PAGO
+              capturedAt: '2026-10-05T10:15:00-06:00'
+              latitude: 19.4326
+              longitude: -99.1332
+              payment:
+                amount: '500.00'
+      responses:
+        '200':
+          description: Reenvío de un clientUuid ya procesado; se devuelve la visita existente sin efectos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Visit'
+        '201':
+          description: Visita creada; si incluye pago, trae folio y enlace de recibo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Visit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Regla de negocio incumplida (horario, comentario, monto, promesa o corte pendiente).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                horario:
+                  value:
+                    code: FUERA_DE_HORARIO
+                    message: Fuera del horario permitido de gestión (07:00 a 22:00)
+                monto:
+                  value:
+                    code: MONTO_EXCEDE_SALDO
+                    message: El pago no puede exceder el saldo total (6,800.00)
+                corte:
+                  value:
+                    code: CORTE_PENDIENTE
+                    message: Tienes un corte pendiente del día 2026-10-04. Genera tu corte para seguir cobrando
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /sync-batches:
+    post:
+      tags: [campo]
+      operationId: createSyncBatch
+      summary: Sincronizar la cola sin conexión del gestor
+      description: |
+        El servidor procesa los registros en el orden de capturedAt y devuelve un resultado por
+        registro. Un registro ya recibido (mismo clientUuid) se reporta como DUPLICADO con su folio
+        original. Un pago que excede el saldo o fue capturado fuera de horario queda EN_REVISION; una
+        visita sin pago fuera de horario se reporta RECHAZADO. Responde 200 aunque algunos registros
+        se rechacen, porque el lote en sí se procesó.
+      x-acceptance-criteria: [RF-13-AC-1, RF-13-AC-2, RF-13-AC-3, RF-13-AC-4, RF-13-AC-5, RF-13-AC-6, RF-13-AC-7]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncBatchRequest'
+      responses:
+        '200':
+          description: Resultado por registro.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncBatchResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          description: El lote supera 300 registros (RNF-07).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /payments:
+    get:
+      tags: [efectivo]
+      operationId: listPayments
+      summary: Listar pagos con filtros (Supervisor, Gerente)
+      description: status=EN_REVISION da la lista "Pagos en revisión" del supervisor responsable.
+      x-acceptance-criteria: [RF-13-AC-4, RF-13-AC-6, RF-02-AC-3]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/PaymentStatus'
+        - name: collectorId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Página de pagos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /payments/{paymentId}:
+    parameters:
+      - $ref: '#/components/parameters/PaymentId'
+    get:
+      tags: [efectivo]
+      operationId: getPayment
+      summary: Consultar un pago
+      x-acceptance-criteria: [RF-07-AC-1, RF-08-AC-2]
+      responses:
+        '200':
+          description: Pago con folio, estado y enlace de recibo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /payments/{paymentId}/annulment:
+    parameters:
+      - $ref: '#/components/parameters/PaymentId'
+    put:
+      tags: [efectivo]
+      operationId: putPaymentAnnulment
+      summary: Anular un pago no conciliado (Supervisor, Gerente)
+      description: |
+        Crea la anulación como subrecurso único del pago. PUT es idempotente: repetir la misma
+        petición no revierte el saldo dos veces. El pago conserva su folio, el saldo y el total del
+        corte se revierten y las promesas afectadas se reevalúan.
+      x-acceptance-criteria: [RF-11-AC-1, RF-11-AC-2, RF-11-AC-3, RF-11-AC-4, RF-11-AC-5, RF-08-AC-4]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnnulmentRequest'
+      responses:
+        '200':
+          description: Pago anulado (o ya estaba anulado con la misma petición).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Motivo inválido o pago de un corte conciliado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                conciliado:
+                  value:
+                    code: CORTE_CONCILIADO
+                    message: El pago pertenece a un corte conciliado; registra la corrección en el sistema core
+                motivo:
+                  value:
+                    code: MOTIVO_INVALIDO
+                    message: El motivo debe tener entre 10 y 300 caracteres
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /receipts/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: Token aleatorio de al menos 128 bits en base64url (RNF-03).
+        schema:
+          type: string
+          minLength: 22
+    get:
+      tags: [publico]
+      operationId: getPublicReceipt
+      summary: Consultar un recibo sin iniciar sesión
+      description: No expone domicilio ni teléfono; el crédito va enmascarado (RD-05).
+      security: []
+      x-acceptance-criteria: [RF-08-AC-1, RF-08-AC-3, RF-08-AC-4]
+      responses:
+        '200':
+          description: Recibo público.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicReceipt'
+        '404':
+          description: Token inexistente o alterado, sin revelar datos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: RECIBO_NO_ENCONTRADO
+                message: Recibo no encontrado
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /promises:
+    get:
+      tags: [campo]
+      operationId: listPromises
+      summary: Listar promesas de pago (Supervisor, Gerente)
+      description: status=INCUMPLIDA da la lista "Promesas incumplidas" de los gestores a cargo del supervisor.
+      x-acceptance-criteria: [RF-09-AC-3, RF-09-AC-4]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/PromiseStatus'
+        - name: dueDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Página de promesas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromisePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /cash-closings:
+    get:
+      tags: [efectivo]
+      operationId: listCashClosings
+      summary: Listar cortes de caja
+      description: El gestor ve los suyos; el supervisor los de sus gestores.
+      x-acceptance-criteria: [RF-10-AC-3, RF-10-AC-5]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ClosingStatus'
+        - name: date
+          in: query
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Página de cortes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashClosingPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [efectivo]
+      operationId: createCashClosing
+      summary: Generar corte de caja (Gestor)
+      description: |
+        Agrupa todos los pagos REGISTRADO y EN_REVISION del gestor que no pertenecen a otro corte.
+        La PWA envía pendingOfflineCount; si es mayor a 0 el corte se rechaza.
+      x-acceptance-criteria: [RF-10-AC-1, RF-10-AC-2]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashClosingCreate'
+      responses:
+        '201':
+          description: Corte creado en PENDIENTE_DE_CONCILIAR.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashClosing'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: Hay registros sin sincronizar o no hay pagos sin corte.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: REGISTROS_SIN_SINCRONIZAR
+                message: Tienes 3 registros sin sincronizar. Conéctate y sincroniza antes de generar tu corte
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /cash-closings/{closingId}:
+    parameters:
+      - $ref: '#/components/parameters/ClosingId'
+    get:
+      tags: [efectivo]
+      operationId: getCashClosing
+      summary: Consultar un corte con sus pagos
+      x-acceptance-criteria: [RF-10-AC-1, RF-11-AC-1]
+      responses:
+        '200':
+          description: Corte.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashClosing'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /cash-closings/{closingId}/reconciliation:
+    parameters:
+      - $ref: '#/components/parameters/ClosingId'
+    put:
+      tags: [efectivo]
+      operationId: putCashClosingReconciliation
+      summary: Conciliar un corte contra el efectivo recibido (Supervisor)
+      description: Si hay diferencia se exige un comentario de 10 a 200 caracteres. PUT es idempotente.
+      x-acceptance-criteria: [RF-10-AC-3, RF-10-AC-4]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconciliationRequest'
+            example:
+              cashReceived: '9300.00'
+              comment: Faltante por cambio mal entregado
+      responses:
+        '200':
+          description: Corte conciliado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashClosing'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          description: Diferencia sin comentario válido, o corte ya conciliado con otro monto.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: COMENTARIO_REQUERIDO
+                message: Captura un comentario de 10 a 200 caracteres para explicar la diferencia de -50.00
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /reconciled-payments:
+    get:
+      tags: [efectivo]
+      operationId: listReconciledPayments
+      summary: Exportar pagos Registrados de cortes conciliados (Supervisor)
+      description: Con Accept text/csv entrega el archivo para el core, sin domicilio ni teléfono.
+      x-acceptance-criteria: [RF-10-AC-6]
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Pagos conciliados de la fecha.
+          content:
+            text/csv:
+              schema:
+                type: string
+              example: |
+                folio,numero_credito,numero_socio,monto,fecha_hora_pago,gestor,id_corte
+                C360-00000042,CR-1001,S-0501,500.00,2026-10-05T10:15:00-06:00,ana.gestor@caja.mx,5d1c
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExportedPayment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /dashboard:
+    get:
+      tags: [indicadores]
+      operationId: getDashboard
+      summary: Tablero de indicadores del día (Supervisor, Gerente)
+      description: El Supervisor solo ve a sus gestores; el Gerente ve a todos.
+      x-acceptance-criteria: [RF-12-AC-1, RF-12-AC-2, RF-12-AC-3, RF-12-AC-4, RF-12-AC-5, RF-02-AC-5]
+      parameters:
+        - name: date
+          in: query
+          description: Por omisión, hoy en America/Mexico_City.
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Indicadores.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /settings/cash-limit:
+    get:
+      tags: [indicadores]
+      operationId: getCashLimit
+      summary: Consultar el límite de efectivo
+      x-acceptance-criteria: [RF-12-AC-2]
+      responses:
+        '200':
+          description: Límite vigente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashLimit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      tags: [indicadores]
+      operationId: putCashLimit
+      summary: Cambiar el límite de efectivo (solo Gerente)
+      description: Registra CONFIG_LIMITE con valor anterior y nuevo.
+      x-acceptance-criteria: [RF-12-AC-6]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashLimit'
+      responses:
+        '200':
+          description: Límite actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashLimit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /audit-events:
+    get:
+      tags: [indicadores]
+      operationId: listAuditEvents
+      summary: Consultar la bitácora (solo Gerente)
+      description: Solo lectura; no existen operaciones para modificar o borrar eventos (RNF-04).
+      x-acceptance-criteria: [RF-01-AC-1, RF-01-AC-2, RF-01-AC-3, RF-04-AC-1, RF-11-AC-1, RF-12-AC-6, RF-13-AC-7]
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: userId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: action
+          in: query
+          schema:
+            type: string
+            example: PAGO_ANULADO
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Página de eventos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token emitido por POST /sessions. Incluye sub (id de usuario), role y exp (RNF-02).
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CreditId:
+      name: creditId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PaymentId:
+      name: paymentId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ClosingId:
+      name: closingId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Petición mal formada (JSON inválido, tipos o formatos incorrectos).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Falta el token o expiró.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: NO_AUTENTICADO
+            message: Tu sesión expiró. Inicia sesión de nuevo
+    Forbidden:
+      description: El rol o la relación con el registro no autorizan la operación; se registra ACCESO_DENEGADO.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: ACCESO_DENEGADO
+            message: No tienes permiso para realizar esta acción
+    NotFound:
+      description: El recurso no existe.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnprocessableEntity:
+      description: Regla de negocio incumplida.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Error inesperado del servidor.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Money:
+      type: string
+      pattern: '^\d{1,10}\.\d{2}$'
+      description: Monto en MXN con exactamente dos decimales (RD-02).
+      example: '500.00'
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+          description: Texto exacto que la interfaz muestra al usuario.
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              issue:
+                type: string
+    PageMeta:
+      type: object
+      required: [page, pageSize, total]
+      properties:
+        page:
+          type: integer
+        pageSize:
+          type: integer
+        total:
+          type: integer
+    Role:
+      type: string
+      enum: [GESTOR, SUPERVISOR, GERENTE]
+    UserStatus:
+      type: string
+      enum: [ACTIVO, INACTIVO]
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+    Session:
+      type: object
+      required: [accessToken, tokenType, expiresAt, user]
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          enum: [Bearer]
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+    User:
+      type: object
+      required: [id, name, email, role, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/Role'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        supervisorId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        deactivatedAt:
+          type: string
+          format: date-time
+          nullable: true
+    UserCreate:
+      type: object
+      required: [name, email, role, password]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/Role'
+        supervisorId:
+          type: string
+          format: uuid
+          description: Obligatorio cuando role es GESTOR (RF-02-AC-4).
+        password:
+          type: string
+          format: password
+          minLength: 10
+          description: Al menos una letra y un dígito (RNF-01).
+    UserUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        supervisorId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/UserStatus'
+    UserPage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    PortfolioImportRequest:
+      type: object
+      required: [file, cutoffDate]
+      properties:
+        file:
+          type: string
+          format: binary
+          description: CSV UTF-8 con los encabezados de RF-03.
+        cutoffDate:
+          type: string
+          format: date
+    PortfolioImport:
+      type: object
+      required: [id, cutoffDate, created, updated, rejected, message]
+      properties:
+        id:
+          type: string
+          format: uuid
+        cutoffDate:
+          type: string
+          format: date
+        created:
+          type: integer
+        updated:
+          type: integer
+        rejected:
+          type: integer
+        message:
+          type: string
+        rejectedRowsUrl:
+          type: string
+          nullable: true
+    RejectedRow:
+      type: object
+      required: [row, field, reason]
+      properties:
+        row:
+          type: integer
+        field:
+          type: string
+        reason:
+          type: string
+    Credit:
+      type: object
+      required: [id, creditNumber, memberName, totalBalance, overdueAmount, daysPastDue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        creditNumber:
+          type: string
+          example: CR-1001
+        memberNumber:
+          type: string
+        memberName:
+          type: string
+        phone:
+          type: string
+        address:
+          type: string
+        neighborhood:
+          type: string
+        municipality:
+          type: string
+        totalBalance:
+          $ref: '#/components/schemas/Money'
+        overdueAmount:
+          $ref: '#/components/schemas/Money'
+        daysPastDue:
+          type: integer
+          minimum: 0
+        collectorId:
+          type: string
+          format: uuid
+          nullable: true
+    CreditPage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Credit'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    AssignmentRequest:
+      type: object
+      required: [mode, toCollectorId]
+      properties:
+        mode:
+          type: string
+          enum: [CREDITS, PENDING_FROM_COLLECTOR]
+        toCollectorId:
+          type: string
+          format: uuid
+        creditIds:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: uuid
+          description: Obligatorio con mode CREDITS.
+        fromCollectorId:
+          type: string
+          format: uuid
+          description: Obligatorio con mode PENDING_FROM_COLLECTOR.
+    AssignmentResult:
+      type: object
+      required: [assigned, keptWithPreviousCollector]
+      properties:
+        assigned:
+          type: integer
+        keptWithPreviousCollector:
+          type: integer
+          description: Créditos que ya tenían visita hoy y no se movieron (RF-04-AC-2).
+    RouteItem:
+      type: object
+      required: [creditId, creditNumber, memberName, address, neighborhood, daysPastDue, overdueAmount, totalBalance, hasActivePromise]
+      properties:
+        creditId:
+          type: string
+          format: uuid
+        creditNumber:
+          type: string
+        memberName:
+          type: string
+        address:
+          type: string
+        neighborhood:
+          type: string
+        phone:
+          type: string
+        daysPastDue:
+          type: integer
+        overdueAmount:
+          $ref: '#/components/schemas/Money'
+        totalBalance:
+          $ref: '#/components/schemas/Money'
+        lastVisitResult:
+          allOf:
+            - $ref: '#/components/schemas/VisitResult'
+          nullable: true
+        lastVisitAt:
+          type: string
+          format: date-time
+          nullable: true
+        hasActivePromise:
+          type: boolean
+        promiseDueDate:
+          type: string
+          format: date
+          nullable: true
+    Route:
+      type: object
+      required: [date, items]
+      properties:
+        date:
+          type: string
+          format: date
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteItem'
+    VisitResult:
+      type: string
+      enum: [PAGO, PROMESA, NO_LOCALIZADO, SE_NIEGA, DOMICILIO_INCORRECTO, OTRO]
+    PaymentInput:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+    PromiseInput:
+      type: object
+      required: [dueDate, amount]
+      properties:
+        dueDate:
+          type: string
+          format: date
+          description: Entre 1 y 15 días naturales posteriores a hoy (RD-06).
+        amount:
+          $ref: '#/components/schemas/Money'
+    VisitCreate:
+      type: object
+      required: [clientUuid, creditId, result, capturedAt]
+      properties:
+        clientUuid:
+          type: string
+          format: uuid
+          description: Generado en el dispositivo; llave de idempotencia (RF-13-AC-3).
+        creditId:
+          type: string
+          format: uuid
+        result:
+          $ref: '#/components/schemas/VisitResult'
+        comment:
+          type: string
+          maxLength: 500
+          description: Obligatorio si result es OTRO.
+        capturedAt:
+          type: string
+          format: date-time
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+          nullable: true
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+          nullable: true
+        payment:
+          $ref: '#/components/schemas/PaymentInput'
+        promise:
+          $ref: '#/components/schemas/PromiseInput'
+    Visit:
+      type: object
+      required: [id, clientUuid, creditId, collectorId, result, capturedAt, withoutLocation]
+      properties:
+        id:
+          type: string
+          format: uuid
+        clientUuid:
+          type: string
+          format: uuid
+        creditId:
+          type: string
+          format: uuid
+        collectorId:
+          type: string
+          format: uuid
+        result:
+          $ref: '#/components/schemas/VisitResult'
+        comment:
+          type: string
+          nullable: true
+        capturedAt:
+          type: string
+          format: date-time
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        withoutLocation:
+          type: boolean
+        outsideAssignment:
+          type: boolean
+        payment:
+          $ref: '#/components/schemas/Payment'
+        promise:
+          $ref: '#/components/schemas/PaymentPromise'
+    PaymentStatus:
+      type: string
+      enum: [REGISTRADO, EN_REVISION, ANULADO]
+    Payment:
+      type: object
+      required: [id, folio, creditId, collectorId, amount, status, paidAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        folio:
+          type: string
+          pattern: '^C360-\d{8}$'
+          example: C360-00000042
+        creditId:
+          type: string
+          format: uuid
+        collectorId:
+          type: string
+          format: uuid
+        amount:
+          $ref: '#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        outsideHours:
+          type: boolean
+        paidAt:
+          type: string
+          format: date-time
+        closingId:
+          type: string
+          format: uuid
+          nullable: true
+        receiptUrl:
+          type: string
+          description: Enlace público para compartir y para el código QR (RF-08-AC-2).
+        creditAfter:
+          $ref: '#/components/schemas/CreditBalance'
+        annulment:
+          $ref: '#/components/schemas/Annulment'
+    CreditBalance:
+      type: object
+      properties:
+        totalBalance:
+          $ref: '#/components/schemas/Money'
+        overdueAmount:
+          $ref: '#/components/schemas/Money'
+        daysPastDue:
+          type: integer
+    PaymentPage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    AnnulmentRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 300
+    Annulment:
+      type: object
+      properties:
+        reason:
+          type: string
+        annulledAt:
+          type: string
+          format: date-time
+        annulledBy:
+          type: string
+          format: uuid
+    PublicReceipt:
+      type: object
+      required: [institution, folio, paidAt, memberName, maskedCreditNumber, amount, remainingBalance, collectorName, status, privacyNoticeUrl]
+      properties:
+        institution:
+          type: string
+        folio:
+          type: string
+        paidAt:
+          type: string
+          format: date-time
+        memberName:
+          type: string
+        maskedCreditNumber:
+          type: string
+          example: '****1001'
+        amount:
+          $ref: '#/components/schemas/Money'
+        remainingBalance:
+          $ref: '#/components/schemas/Money'
+        collectorName:
+          type: string
+        status:
+          type: string
+          enum: [REGISTRADO, EN_REVISION, ANULADO]
+        annulledAt:
+          type: string
+          format: date-time
+          nullable: true
+        privacyNoticeUrl:
+          type: string
+    PromiseStatus:
+      type: string
+      enum: [VIGENTE, CUMPLIDA, INCUMPLIDA]
+    PaymentPromise:
+      type: object
+      required: [id, creditId, dueDate, amount, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        creditId:
+          type: string
+          format: uuid
+        dueDate:
+          type: string
+          format: date
+        amount:
+          $ref: '#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/PromiseStatus'
+        collectorId:
+          type: string
+          format: uuid
+    PromisePage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentPromise'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    SyncBatchRequest:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          minItems: 1
+          maxItems: 300
+          items:
+            $ref: '#/components/schemas/VisitCreate'
+    SyncRecordResult:
+      type: object
+      required: [clientUuid, outcome]
+      properties:
+        clientUuid:
+          type: string
+          format: uuid
+        outcome:
+          type: string
+          enum: [CREADO, DUPLICADO, EN_REVISION, RECHAZADO]
+        visit:
+          $ref: '#/components/schemas/Visit'
+        error:
+          $ref: '#/components/schemas/Error'
+    SyncBatchResult:
+      type: object
+      required: [processed, results]
+      properties:
+        processed:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncRecordResult'
+    ClosingStatus:
+      type: string
+      enum: [PENDIENTE_DE_CONCILIAR, CONCILIADO, CONCILIADO_CON_DIFERENCIA]
+    CashClosingCreate:
+      type: object
+      required: [pendingOfflineCount]
+      properties:
+        pendingOfflineCount:
+          type: integer
+          minimum: 0
+          description: Registros en la cola sin conexión del dispositivo (RF-10-AC-2).
+    CashClosing:
+      type: object
+      required: [id, collectorId, createdAt, paymentCount, total, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        collectorId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        paymentCount:
+          type: integer
+        total:
+          $ref: '#/components/schemas/Money'
+        status:
+          $ref: '#/components/schemas/ClosingStatus'
+        cashReceived:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          nullable: true
+        difference:
+          type: string
+          pattern: '^-?\d{1,10}\.\d{2}$'
+          nullable: true
+          example: '-50.00'
+        comment:
+          type: string
+          nullable: true
+        reconciledBy:
+          type: string
+          format: uuid
+          nullable: true
+        reconciledAt:
+          type: string
+          format: date-time
+          nullable: true
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+    CashClosingPage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CashClosing'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+    ReconciliationRequest:
+      type: object
+      required: [cashReceived]
+      properties:
+        cashReceived:
+          $ref: '#/components/schemas/Money'
+        comment:
+          type: string
+          minLength: 10
+          maxLength: 200
+    ExportedPayment:
+      type: object
+      required: [folio, creditNumber, memberNumber, amount, paidAt, collector, closingId]
+      properties:
+        folio:
+          type: string
+        creditNumber:
+          type: string
+        memberNumber:
+          type: string
+        amount:
+          $ref: '#/components/schemas/Money'
+        paidAt:
+          type: string
+          format: date-time
+        collector:
+          type: string
+        closingId:
+          type: string
+          format: uuid
+    Dashboard:
+      type: object
+      required: [date, collectedAmount, promiseFulfillmentPct, overdueBuckets, collectors, cashLimit]
+      properties:
+        date:
+          type: string
+          format: date
+        collectedAmount:
+          $ref: '#/components/schemas/Money'
+        promiseFulfillmentPct:
+          type: number
+          format: float
+          nullable: true
+          example: 75.0
+        overdueBuckets:
+          type: array
+          items:
+            type: object
+            required: [bucket, credits, overdueAmount]
+            properties:
+              bucket:
+                type: string
+                enum: ['1-30', '31-60', '61-90', '91+']
+              credits:
+                type: integer
+              overdueAmount:
+                $ref: '#/components/schemas/Money'
+        cashLimit:
+          $ref: '#/components/schemas/Money'
+        collectors:
+          type: array
+          items:
+            type: object
+            required: [collectorId, name, visits, routeCreditsAt7, undeliveredCash, overLimit]
+            properties:
+              collectorId:
+                type: string
+                format: uuid
+              name:
+                type: string
+              visits:
+                type: integer
+              routeCreditsAt7:
+                type: integer
+              undeliveredCash:
+                $ref: '#/components/schemas/Money'
+              overLimit:
+                type: boolean
+              alert:
+                type: string
+                nullable: true
+                example: Supera el límite de efectivo (10,000.00)
+    CashLimit:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+    AuditEvent:
+      type: object
+      required: [id, occurredAtUtc, action, entity, entityId]
+      properties:
+        id:
+          type: integer
+          format: int64
+        occurredAtUtc:
+          type: string
+          format: date-time
+        userId:
+          type: string
+          format: uuid
+          nullable: true
+        role:
+          allOf:
+            - $ref: '#/components/schemas/Role'
+          nullable: true
+        action:
+          type: string
+        entity:
+          type: string
+        entityId:
+          type: string
+        before:
+          type: object
+          nullable: true
+          additionalProperties: true
+        after:
+          type: object
+          nullable: true
+          additionalProperties: true
+    AuditEventPage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        meta:
+          $ref: '#/components/schemas/PageMeta'

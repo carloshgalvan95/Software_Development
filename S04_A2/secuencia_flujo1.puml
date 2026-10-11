@@ -1,0 +1,40 @@
+@startuml secuencia_flujo1
+title Flujo 1: el gestor registra una visita con pago en línea (RF-06, RF-07, RF-08)
+autonumber
+actor "Gestor" as G
+participant "Cliente Browser\n(Chrome Android)" as B
+participant "Frontend\n(PWA React)" as F
+participant "Backend API\n(FastAPI)" as A
+database "BD\n(PostgreSQL)" as D
+
+G -> B : Toca "Registrar visita" en CR-1001
+B -> F : Evento de interfaz
+F -> F : Genera clientUuid y capturedAt
+F -> A : POST /api/v1/visits\nAuthorization: Bearer JWT\n{clientUuid, creditId, result: PAGO, payment: {amount: "500.00"}}
+A -> A : Valida JWT y rol GESTOR
+A -> D : SELECT visita WHERE client_uuid = :uuid
+D --> A : sin resultados
+A -> D : SELECT crédito asignado al gestor\ny pagos de días anteriores sin corte
+D --> A : CR-1001 (saldo 8,000.00, vencido 1,200.00)
+alt Crédito no asignado al gestor
+  A -> D : INSERT evento_bitacora (ACCESO_DENEGADO)
+  A --> F : 403 ACCESO_DENEGADO
+else Fuera de 07:00 a 22:00, monto inválido o corte pendiente
+  A --> F : 422 {code, message}
+  F --> B : Muestra el mensaje exacto del SRS
+else Validación correcta
+  A -> D : BEGIN
+  A -> D : INSERT visita
+  A -> D : nextval(folio_seq) e INSERT pago REGISTRADO\n(folio C360-00000042)
+  A -> D : UPDATE crédito (saldo 7,500.00, vencido 700.00)
+  A -> D : INSERT recibo (token 128 bits)
+  A -> D : UPDATE promesa vigente si se cumple (RF-09-AC-3)
+  A -> D : INSERT evento_bitacora (PAGO_REGISTRADO)
+  A -> D : COMMIT
+  A --> F : 201 Visit {payment: {folio, receiptUrl, creditAfter}}
+  F --> B : Pantalla de confirmación con folio y QR
+end
+G -> B : Toca "Compartir recibo"
+B -> B : navigator.share(receiptUrl)
+note over B : El socio abre el enlace sin cuenta:\nGET /api/v1/receipts/{token} -> 200 PublicReceipt
+@enduml

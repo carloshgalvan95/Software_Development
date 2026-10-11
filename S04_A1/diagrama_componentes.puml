@@ -1,0 +1,29 @@
+@startuml diagrama_componentes
+!include <C4/C4_Container>
+title Cobra360 - Diagrama de contenedores (C4 nivel 2)
+
+Person(gestor, "Gestor", "Cobra en campo desde un celular Android, a veces sin señal")
+Person(oficina, "Supervisor / Gerente", "Asigna cartera, concilia cortes, consulta tablero")
+Person(socio, "Socio", "Consulta su recibo sin cuenta")
+
+System_Boundary(c360, "Cobra360") {
+  Container(pwa, "Aplicación web (PWA)", "React 19, Vite, TypeScript", "Vista móvil del gestor y vista de oficina. Service Worker y cola sin conexión en IndexedDB")
+  Container(proxy, "Proxy inverso", "Caddy", "Termina TLS 1.2+, redirige HTTP a HTTPS, sirve la PWA y enruta /v1 a la API")
+  Container(api, "API Cobra360", "Python 3.12, FastAPI", "Reglas de negocio por módulo: auth, cartera, campo, efectivo, sincronizacion, indicadores, bitacora. Emite JWT")
+  Container(job, "Proceso programado", "Python, cron", "Cierre diario de promesas a las 00:05 (RF-09-AC-4)")
+  ContainerDb(db, "Base de datos", "PostgreSQL 16", "Usuarios, créditos, visitas, pagos, folios, promesas, cortes, bitácora de solo inserción")
+}
+
+System_Ext(core, "Sistema core de la institución", "Fuente oficial de saldos; solo intercambia archivos CSV")
+
+Rel(gestor, pwa, "Usa", "HTTPS")
+Rel(oficina, pwa, "Usa", "HTTPS")
+Rel(socio, proxy, "Abre enlace o QR del recibo", "HTTPS")
+Rel(pwa, proxy, "Llamadas a la API REST, carga y descarga de CSV", "HTTPS/JSON y multipart, Bearer JWT")
+Rel(proxy, api, "Reenvía /v1", "HTTP interno")
+Rel(api, db, "Lee y escribe", "SQL, SQLAlchemy")
+Rel(job, db, "Actualiza estado de promesas", "SQL")
+Rel(oficina, core, "Exporta cartera e importa pagos conciliados", "Archivo CSV")
+
+SHOW_LEGEND()
+@enduml

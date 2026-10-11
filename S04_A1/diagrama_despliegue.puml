@@ -1,0 +1,49 @@
+@startuml diagrama_despliegue
+title Cobra360 - Diagrama de despliegue
+
+node "Celular del gestor\n(Android 10+, 2 GB RAM)" as cel {
+  node "Chrome para Android" as chromeA {
+    artifact "PWA Cobra360\n(Service Worker)" as pwaA
+    database "IndexedDB\ncola sin conexión" as idb
+  }
+}
+
+node "PC de oficina" as pc {
+  node "Chrome / Edge" as chromeB {
+    artifact "PWA Cobra360\n(vista de oficina)" as pwaB
+  }
+}
+
+cloud "Proveedor de nube" {
+  node "VM Linux Ubuntu 24.04\n2 vCPU, 4 GB RAM" as vm {
+    node "Docker Engine + Compose" as docker {
+      node "contenedor: proxy\n(Caddy 2)" as proxy {
+        artifact "Certificado TLS\nLet's Encrypt" as cert
+        artifact "build estático de la PWA" as static
+      }
+      node "contenedor: api\n(Python 3.12, Uvicorn)" as api {
+        artifact "cobra360-api\n(FastAPI)" as app
+      }
+      node "contenedor: scheduler\n(cron)" as sched {
+        artifact "cierre_promesas.py" as cron
+      }
+      node "contenedor: db\n(PostgreSQL 16)" as db {
+        database "cobra360" as schema
+      }
+    }
+    folder "volumen pgdata" as vol
+  }
+  storage "Almacenamiento de objetos\nrespaldos diarios" as backup
+}
+
+node "Servidor del core\n(institución)" as core
+
+pwaA --> proxy : HTTPS 443\nTLS 1.2+
+pwaB --> proxy : HTTPS 443
+proxy --> api : HTTP 8000\nred interna
+api --> db : TCP 5432
+sched --> db : TCP 5432
+db --> vol
+db ..> backup : pg_dump diario
+pc ..> core : archivo CSV\n(manual, fuera de línea)
+@enduml

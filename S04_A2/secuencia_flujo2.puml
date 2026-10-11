@@ -1,0 +1,35 @@
+@startuml secuencia_flujo2
+title Flujo 2: sincronización de la cola sin conexión (RF-13)
+autonumber
+actor "Gestor" as G
+participant "Cliente Browser\n(Service Worker + IndexedDB)" as B
+participant "Frontend\n(PWA React)" as F
+participant "Backend API\n(FastAPI)" as A
+database "BD\n(PostgreSQL)" as D
+
+G -> F : Registra visita PAGO sin conexión
+F -> B : Guarda registro en IndexedDB\n{clientUuid, capturedAt, payment}
+F --> G : "Comprobante provisional, sin folio"\ncontador de pendientes + 1
+... El dispositivo recupera la conexión con la sesión vigente ...
+B -> F : evento online
+F -> A : POST /api/v1/sync-batches\nAuthorization: Bearer JWT\n{records: [r1, r2, r3] ordenados por capturedAt}
+A -> A : Valida JWT y que el token sea del mismo gestor que capturó
+loop por cada registro, en orden de captura
+  A -> D : SELECT visita WHERE client_uuid = :uuid
+  alt Ya existe (reenvío sin confirmación)
+    D --> A : visita y pago existentes
+    A -> A : outcome DUPLICADO con folio original
+  else Visita sin pago capturada después de 22:00
+    A -> A : outcome RECHAZADO (RD-01)
+  else Pago que excede el saldo o fuera de horario
+    A -> D : BEGIN / INSERT visita / INSERT pago EN_REVISION con folio\nsin tocar el saldo / INSERT bitácora / COMMIT
+    A -> A : outcome EN_REVISION
+  else Registro válido
+    A -> D : BEGIN / INSERT visita / INSERT pago REGISTRADO con folio\nUPDATE crédito / INSERT recibo / INSERT bitácora / COMMIT
+    A -> A : outcome CREADO
+  end
+end
+A --> F : 200 SyncBatchResult {processed: 3, results[]}
+F -> B : Elimina de IndexedDB los registros\nCREADO, DUPLICADO, EN_REVISION y RECHAZADO
+F --> G : Contador de pendientes en 0, folios y recibos disponibles;\nlos rechazados se marcan "Rechazado: fuera del horario permitido"
+@enduml

@@ -1,0 +1,201 @@
+@startuml diagrama_clases
+title Cobra360 - Diagrama de clases del dominio
+skinparam classAttributeIconSize 0
+hide empty methods
+
+' Decisiones propias que difieren del borrador del agente (detalle en decision_arquitectonica.md):
+' D1. Usuario abstracto con herencia Gestor/Supervisor/Gerente en lugar de un campo role.
+' D2. Visita compone al Pago y a la Promesa (0..1); en el borrador el pago podía existir sin visita.
+' D3. Anulacion como clase propia compuesta en Pago (motivo, fecha, quién autoriza) en lugar de solo un estado.
+' D4. Visita.fueraDeAsignacion: el registro sobre crédito reasignado se acepta y se marca (RF-13-AC-7), no se rechaza.
+
+enum Rol {
+  GESTOR
+  SUPERVISOR
+  GERENTE
+}
+
+enum EstadoUsuario {
+  ACTIVO
+  INACTIVO
+}
+
+enum ResultadoVisita {
+  PAGO
+  PROMESA
+  NO_LOCALIZADO
+  SE_NIEGA
+  DOMICILIO_INCORRECTO
+  OTRO
+}
+
+enum EstadoPago {
+  REGISTRADO
+  EN_REVISION
+  ANULADO
+}
+
+enum EstadoPromesa {
+  VIGENTE
+  CUMPLIDA
+  INCUMPLIDA
+}
+
+enum EstadoCorte {
+  PENDIENTE_DE_CONCILIAR
+  CONCILIADO
+  CONCILIADO_CON_DIFERENCIA
+}
+
+abstract class Usuario {
+  - id: UUID
+  - nombre: String
+  - correo: String {unique}
+  - hashContrasena: String
+  - estado: EstadoUsuario
+  - intentosFallidos: int
+  - bloqueadoHasta: DateTime [0..1]
+  + rol(): Rol
+  + desactivar(): void
+}
+
+class Gestor {
+  + efectivoNoEntregado(): Decimal
+  + tieneCortePendienteDeDiaAnterior(): boolean
+}
+
+class Supervisor {
+  + conciliar(corte: CorteCaja, efectivo: Decimal, comentario: String): void
+}
+
+class Gerente {
+  + cambiarLimiteEfectivo(nuevo: Decimal): void
+}
+
+class Credito {
+  - numeroCredito: String {unique}
+  - numeroSocio: String
+  - nombreSocio: String
+  - telefono: String
+  - domicilio: String
+  - colonia: String
+  - municipio: String
+  - saldoTotal: Decimal
+  - montoVencido: Decimal
+  - fechaVencimientoAntigua: Date [0..1]
+  + diasAtraso(hoy: Date): int
+  + aplicarPago(monto: Decimal): void
+  + revertirPago(pago: Pago): void
+}
+
+class Importacion {
+  - id: UUID
+  - fechaCorte: Date
+  - fechaHora: DateTime
+  - creados: int
+  - actualizados: int
+  - rechazados: int
+}
+
+class FilaRechazada {
+  - fila: int
+  - campo: String
+  - motivo: String
+}
+
+class Visita {
+  - id: UUID
+  - uuidDispositivo: UUID {unique}
+  - resultado: ResultadoVisita
+  - comentario: String [0..1]
+  - fechaHoraCaptura: DateTime
+  - latitud: Decimal [0..1]
+  - longitud: Decimal [0..1]
+  - fueraDeAsignacion: boolean
+}
+
+class Pago {
+  - id: UUID
+  - folio: String {unique, C360-NNNNNNNN}
+  - monto: Decimal
+  - estado: EstadoPago
+  - fechaHora: DateTime
+  - fueraDeHorario: boolean
+}
+
+class Recibo {
+  - token: String {>= 128 bits}
+  - urlPublica: String
+  + numeroCreditoEnmascarado(): String
+}
+
+class Anulacion {
+  - motivo: String {10..300}
+  - fechaHora: DateTime
+}
+
+class Promesa {
+  - id: UUID
+  - fechaCompromiso: Date
+  - montoPrometido: Decimal
+  - estado: EstadoPromesa
+  + evaluar(hoy: Date): void
+}
+
+class CorteCaja {
+  - id: UUID
+  - fechaHora: DateTime
+  - total: Decimal
+  - efectivoRecibido: Decimal [0..1]
+  - diferencia: Decimal [0..1]
+  - comentario: String [0..1]
+  - estado: EstadoCorte
+  - fechaHoraConciliacion: DateTime [0..1]
+}
+
+class Configuracion {
+  - limiteEfectivo: Decimal = 10000.00
+  - zonaHoraria: String = America/Mexico_City
+}
+
+class EventoBitacora <<solo inserción>> {
+  - id: long
+  - fechaHoraUtc: DateTime
+  - accion: String
+  - entidad: String
+  - entidadId: String
+  - valorAnterior: JSON [0..1]
+  - valorNuevo: JSON [0..1]
+}
+
+Usuario <|-- Gestor
+Usuario <|-- Supervisor
+Usuario <|-- Gerente
+Usuario ..> Rol
+
+Supervisor "1" -- "0..*" Gestor : a cargo de >
+Gestor "0..1" -- "0..*" Credito : tiene asignados >
+Supervisor "1" -- "0..*" Importacion : ejecuta >
+Importacion "1" *-- "0..*" FilaRechazada : reporta >
+
+Credito "1" -- "0..*" Visita : recibe >
+Gestor "1" -- "0..*" Visita : registra >
+Visita "1" *-- "0..1" Pago : incluye >
+Visita "1" *-- "0..1" Promesa : incluye >
+Credito "1" -- "0..*" Promesa : tiene >
+
+Pago "1" *-- "1" Recibo : genera >
+Pago "1" *-- "0..1" Anulacion : puede tener >
+Anulacion "0..*" -- "1" Usuario : autorizada por >
+CorteCaja "0..1" o-- "1..*" Pago : agrupa >
+Gestor "1" -- "0..*" CorteCaja : genera >
+Supervisor "0..1" -- "0..*" CorteCaja : concilia >
+
+Usuario "0..1" -- "0..*" EventoBitacora : origina >
+Gerente "1..*" -- "1" Configuracion : administra >
+Pago ..> EstadoPago
+Promesa ..> EstadoPromesa
+CorteCaja ..> EstadoCorte
+Visita ..> ResultadoVisita
+Usuario ..> EstadoUsuario
+@enduml
